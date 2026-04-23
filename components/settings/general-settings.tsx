@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -13,9 +14,10 @@ import {
   AlertDialogFooter,
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog';
-import { Loader2, Trash2, AlertTriangle } from 'lucide-react';
+import { Loader2, Trash2, AlertTriangle, LogOut } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { clearDatabase } from '@/lib/utils/database';
+import { authClient, useSession } from '@/lib/auth-client';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 
@@ -23,6 +25,24 @@ const log = createLogger('GeneralSettings');
 
 export function GeneralSettings() {
   const { t } = useI18n();
+  const router = useRouter();
+  const { data: session } = useSession();
+
+  // Sign-out state
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = useCallback(async () => {
+    setSigningOut(true);
+    try {
+      await authClient.signOut();
+      router.push('/sign-in');
+      router.refresh();
+    } catch (error) {
+      log.error('Sign out failed:', error);
+      toast.error(t('settings.signOutFailed'));
+      setSigningOut(false);
+    }
+  }, [router, t]);
 
   // Clear cache state
   const [showClearDialog, setShowClearDialog] = useState(false);
@@ -63,6 +83,37 @@ export function GeneralSettings() {
 
   return (
     <div className="flex flex-col gap-8">
+      {/* Account */}
+      {session?.user && (
+        <div className="rounded-xl border bg-muted/30 overflow-hidden">
+          <div className="p-4 space-y-4">
+            <h3 className="text-sm font-semibold">{t('settings.account')}</h3>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-muted-foreground">
+                  {t('settings.accountSignedInAs')}
+                </p>
+                <p className="text-sm font-medium truncate mt-0.5">{session.user.email}</p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={handleSignOut}
+                disabled={signingOut}
+              >
+                {signingOut ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                )}
+                {t('settings.signOut')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Danger Zone - Clear Cache */}
       <div className="relative rounded-xl border border-destructive/30 bg-destructive/[0.03] dark:bg-destructive/[0.06] overflow-hidden">
         {/* Subtle diagonal stripe pattern for danger emphasis */}
