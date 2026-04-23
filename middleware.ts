@@ -1,77 +1,83 @@
+/**
+ * Auth gate — every request needs a valid Better-Auth session.
+ * Unauthenticated API requests get 401; pages get redirected to /sign-in.
+ *
+ * Admin paths (/api/admin-auth/*, /api/admin/*) bypass this gate; admin
+ * endpoints validate their own session via lib/require-admin.ts and the
+ * cross-origin admin SPA receives CORS headers here.
+ */
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 
-/** Convert string to Uint8Array */
-function encode(str: string): Uint8Array {
-  return new TextEncoder().encode(str);
-}
+const PUBLIC_PAGES = new Set(['/sign-in', '/sign-up']);
 
-/** Convert ArrayBuffer to hex string */
-function bufToHex(buf: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+const PUBLIC_API_PREFIXES = ['/api/auth/', '/api/health'];
 
-/** Verify an HMAC-signed token using Web Crypto API (Edge-compatible) */
-async function verifyToken(token: string, accessCode: string): Promise<boolean> {
-  const dotIndex = token.indexOf('.');
-  if (dotIndex === -1) return false;
-
-  const timestamp = token.substring(0, dotIndex);
-  const signature = token.substring(dotIndex + 1);
-
-  const keyData = encode(accessCode);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    keyData.buffer as ArrayBuffer,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
+function isPublicApi(pathname: string): boolean {
+  return PUBLIC_API_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(prefix),
   );
+}
 
-  const data = encode(timestamp);
-  const expected = bufToHex(await crypto.subtle.sign('HMAC', key, data.buffer as ArrayBuffer));
+function isAdminApi(pathname: string): boolean {
+  return pathname.startsWith('/api/admin-auth/') || pathname.startsWith('/api/admin/');
+}
 
-  // Constant-length comparison (not truly constant-time in JS, but sufficient here)
-  if (signature.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < signature.length; i++) {
-    mismatch |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
+function applyCors(response: NextResponse, request: NextRequest): NextResponse {
+  const origin = request.headers.get('origin');
+  const trusted = process.env.ADMIN_SPA_ORIGIN?.trim();
+  if (origin && trusted && origin === trusted) {
+    response.headers.set('Access-Control-Allow-Origin', origin);
+    response.headers.set('Access-Control-Allow-Credentials', 'true');
+    response.headers.set(
+      'Access-Control-Allow-Methods',
+      'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    );
+    response.headers.set(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, Cookie',
+    );
+    response.headers.set('Vary', 'Origin');
   }
-  return mismatch === 0;
+  return response;
 }
 
 export async function middleware(request: NextRequest) {
-  const accessCode = process.env.ACCESS_CODE;
-  if (!accessCode) {
-    return NextResponse.next();
-  }
-
   const { pathname } = request.nextUrl;
 
-  // Whitelist: access-code endpoints, health check
-  if (pathname.startsWith('/api/access-code/') || pathname === '/api/health') {
+  // CORS preflight for admin paths
+  if (request.method === 'OPTIONS' && isAdminApi(pathname)) {
+    return applyCors(new NextResponse(null, { status: 204 }), request);
+  }
+
+  // Admin paths bypass C-end auth; their handlers do their own check
+  if (isAdminApi(pathname)) {
+    return applyCors(NextResponse.next(), request);
+  }
+
+  if (isPublicApi(pathname) || PUBLIC_PAGES.has(pathname)) {
     return NextResponse.next();
   }
 
-  // Check cookie — validate HMAC signature, not just existence
-  const cookie = request.cookies.get('openmaic_access');
-  if (cookie?.value && (await verifyToken(cookie.value, accessCode))) {
+  const session = await auth.api.getSession({ headers: request.headers });
+
+  if (session) {
     return NextResponse.next();
   }
 
-  // API requests without valid cookie → 401
   if (pathname.startsWith('/api/')) {
     return NextResponse.json(
-      { success: false, errorCode: 'INVALID_REQUEST', error: 'Access code required' },
+      { success: false, errorCode: 'UNAUTHENTICATED', error: 'Authentication required' },
       { status: 401 },
     );
   }
 
-  // Page requests → let through, frontend shows modal
-  return NextResponse.next();
+  const signInUrl = new URL('/sign-in', request.url);
+  if (pathname !== '/') signInUrl.searchParams.set('callbackUrl', pathname);
+  return NextResponse.redirect(signInUrl);
 }
 
 export const config = {
+  runtime: 'nodejs',
   matcher: ['/((?!_next/static|_next/image|favicon.ico|logos/).*)'],
 };

@@ -1,0 +1,252 @@
+// OpenMAIC / DeepStudy — Prisma schema
+// SQLite + Better-Auth (邮箱密码 + GitHub/Google OAuth + admin/bearer)
+// 业务表精简自 AIstudy2: InvitationCode, TokenTransaction, AiTokenUsage, SystemLog
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Better-Auth core (含 admin plugin 字段) ─────────────────
+
+model User {
+  id            String  @id
+  email         String  @unique
+  emailVerified Boolean @default(false)
+  name          String
+  image         String?
+
+  // admin plugin
+  role       String    @default("user") // "user" | "admin"
+  banned     Boolean?  @default(false)
+  banReason  String?
+  banExpires DateTime?
+
+  // 业务字段（Phase 1 启用）
+  tokenBalance Int     @default(0)
+  tokenTotal   Int     @default(0) // 历史累计获得
+  imageQuota   Int     @default(0)
+  imageUsed    Int     @default(0)
+  invitedBy    String? // InvitationCode.code 字符串引用，未来可改为外键
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions          Session[]
+  accounts          Account[]
+  tokenTransactions TokenTransaction[]
+  usedInvitation    InvitationCode?    @relation("UsedBy")
+
+  @@index([role])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+
+  // admin plugin
+  impersonatedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  idToken               String?
+  password              String? // 邮箱密码登录的 hash
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ─── Admin auth (独立账号体系，与 C 端 user 表完全隔离) ─────────
+
+model AdminUser {
+  id            String  @id
+  email         String  @unique
+  emailVerified Boolean @default(false)
+  name          String
+  image         String?
+
+  // admin plugin
+  banned     Boolean?  @default(false)
+  banReason  String?
+  banExpires DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions AdminSession[]
+  accounts AdminAccount[]
+
+  @@map("admin_user")
+}
+
+model AdminSession {
+  id        String   @id
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+
+  impersonatedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("admin_session")
+}
+
+model AdminAccount {
+  id                    String    @id
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  idToken               String?
+  password              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("admin_account")
+}
+
+model AdminVerification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("admin_verification")
+}
+
+// ─── Invitation codes ────────────────────────────────────────
+
+model InvitationCode {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  status    String    @default("active") // "active" | "used" | "disabled"
+  usedById  String?   @unique
+  usedBy    User?     @relation("UsedBy", fields: [usedById], references: [id])
+  usedAt    DateTime?
+  createdBy String // 创建者 user id 或 "system"
+  note      String?
+  createdAt DateTime  @default(now())
+
+  @@index([status])
+  @@index([code])
+}
+
+// ─── Token transactions (余额流水) ───────────────────────────
+
+model TokenTransaction {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String // "signup_bonus" | "invite_reward" | "consumption" | "admin_adjust"
+  amount       Int // 正=入账，负=消耗
+  balanceAfter Int
+  description  String?
+  referenceId  String? // 关联 invitation code id / scene id 等
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ─── AI token usage (LLM 调用计费) ───────────────────────────
+
+model AiTokenUsage {
+  id               String   @id @default(cuid())
+  userId           String?
+  model            String // 调用的模型名
+  phase            String // "outline" | "scene_content" | "chat" | "tts" | ...
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  estimatedCost    Float    @default(0)
+  referenceId      String? // 关联业务实体（场景 id / outline id 等）
+  createdAt        DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([model])
+}
+
+// ─── System logs ─────────────────────────────────────────────
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  level     String // "info" | "warn" | "error" | "debug"
+  message   String
+  stack     String?
+  source    String? // 模块来源
+  requestId String?
+  method    String?
+  url       String?
+  userId    String?
+  metadata  String? // JSON 字符串（SQLite 无原生 JSON）
+  createdAt DateTime @default(now())
+
+  @@index([level])
+  @@index([createdAt])
+  @@index([userId])
+  @@index([source])
+}

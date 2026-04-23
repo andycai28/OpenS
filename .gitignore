@@ -68,6 +68,8 @@ next-env.d.ts
 # generated data
 /data
 /logs
+*.db
+*.db-journal
 
 # docs
 /docs
