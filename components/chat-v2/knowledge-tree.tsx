@@ -1,20 +1,26 @@
 'use client';
 
 import * as React from 'react';
-import { BookOpen, ChevronRight, Dot } from 'lucide-react';
+import { BookOpen, ChevronRight } from 'lucide-react';
 
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-import type { KnowledgeChapter } from '@/lib/mock/knowledge-tree';
+import type { StudyKnowledgePoint } from '@/lib/types/study';
 
 interface KnowledgeTreeProps {
-  chapters: KnowledgeChapter[];
+  title?: string;
+  points: StudyKnowledgePoint[];
   selectedId: string | null;
   onSelect: (knowledgePointId: string) => void;
   className?: string;
 }
 
-export function KnowledgeTree({ chapters, selectedId, onSelect, className }: KnowledgeTreeProps) {
+export function KnowledgeTree({
+  title = '学习大纲',
+  points,
+  selectedId,
+  onSelect,
+  className,
+}: KnowledgeTreeProps) {
   return (
     <aside
       className={cn(
@@ -24,79 +30,101 @@ export function KnowledgeTree({ chapters, selectedId, onSelect, className }: Kno
     >
       <header className="flex items-center gap-2 border-b border-border px-4 py-3">
         <BookOpen className="size-4 text-muted-foreground" />
-        <h2 className="text-sm font-semibold">学习大纲</h2>
+        <h2 className="truncate text-sm font-semibold" title={title}>
+          {title}
+        </h2>
       </header>
 
       <div className="flex-1 overflow-y-auto px-2 py-3">
-        {chapters.map((chapter) => (
-          <ChapterItem
-            key={chapter.id}
-            chapter={chapter}
-            selectedId={selectedId}
-            onSelect={onSelect}
-          />
-        ))}
+        {points.length === 0 ? (
+          <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+            暂无知识点
+          </p>
+        ) : (
+          <ol className="space-y-0.5">
+            {points.map((point) => (
+              <PointItem
+                key={point.id}
+                point={point}
+                isSelected={point.id === selectedId}
+                onSelect={onSelect}
+              />
+            ))}
+          </ol>
+        )}
       </div>
     </aside>
   );
 }
 
-function ChapterItem({
-  chapter,
-  selectedId,
+function PointItem({
+  point,
+  isSelected,
   onSelect,
 }: {
-  chapter: KnowledgeChapter;
-  selectedId: string | null;
+  point: StudyKnowledgePoint;
+  isSelected: boolean;
   onSelect: (id: string) => void;
 }) {
-  const [open, setOpen] = React.useState(true);
+  const [expanded, setExpanded] = React.useState(false);
+  const isOpen = isSelected || expanded;
+  const hasKeyPoints = point.keyPoints.length > 0;
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mb-1">
-      <CollapsibleTrigger className="group flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-left text-sm font-medium text-foreground/80 hover:bg-muted">
-        <ChevronRight
+    <li>
+      <div className="flex items-stretch">
+        {hasKeyPoints ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+            className="flex w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
+            aria-label={isOpen ? '折叠' : '展开'}
+          >
+            <ChevronRight
+              className={cn('size-3.5 transition-transform', isOpen && 'rotate-90')}
+            />
+          </button>
+        ) : (
+          <span className="w-5 shrink-0" />
+        )}
+        <button
+          type="button"
+          onClick={() => onSelect(point.id)}
           className={cn(
-            'size-3.5 shrink-0 transition-transform',
-            open && 'rotate-90',
+            'flex flex-1 items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+            isSelected
+              ? 'bg-primary/10 font-medium text-primary'
+              : 'text-foreground/80 hover:bg-muted hover:text-foreground',
           )}
-        />
-        <span className="truncate">{chapter.title}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-0.5">
-        {chapter.points.map((point) => {
-          const isSelected = point.id === selectedId;
-          return (
-            <div key={point.id} className="ml-3">
-              <button
-                type="button"
-                onClick={() => onSelect(point.id)}
-                className={cn(
-                  'flex w-full items-center rounded-md px-2 py-1.5 text-left text-sm transition-colors',
-                  isSelected
-                    ? 'bg-primary/10 font-medium text-primary'
-                    : 'text-foreground/70 hover:bg-muted hover:text-foreground',
-                )}
-              >
-                <span className="truncate">{point.title}</span>
-              </button>
-              {isSelected && point.requirements.length > 0 && (
-                <ul className="ml-4 mt-1 space-y-0.5 border-l border-border/60 pl-3">
-                  {point.requirements.map((req) => (
-                    <li
-                      key={req.id}
-                      className="flex items-start gap-1 py-0.5 text-xs text-muted-foreground"
-                    >
-                      <Dot className="mt-0.5 size-3 shrink-0" />
-                      <span>{req.title}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          );
-        })}
-      </CollapsibleContent>
-    </Collapsible>
+        >
+          <span
+            className={cn(
+              'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-xs',
+              isSelected ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground',
+            )}
+          >
+            {point.order}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{point.title}</span>
+        </button>
+      </div>
+
+      {isOpen && hasKeyPoints && (
+        <ul className="ml-10 mt-0.5 mb-1 space-y-0.5 border-l border-border/60 pl-3">
+          {point.keyPoints.map((kp, i) => (
+            <li
+              key={i}
+              className="flex items-start gap-1.5 py-0.5 text-xs text-muted-foreground"
+            >
+              <span className="mt-0.5">·</span>
+              <span>{kp}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }

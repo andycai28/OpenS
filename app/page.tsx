@@ -307,7 +307,7 @@ function HomePage() {
       };
       sessionStorage.setItem('generationSession', JSON.stringify(sessionState));
 
-      router.push('/generation-preview');
+      router.push('/generate-outline');
     } catch (err) {
       log.error('Error preparing generation:', err);
       setError(err instanceof Error ? err.message : t('upload.generateFailed'));
