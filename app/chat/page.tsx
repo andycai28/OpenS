@@ -7,6 +7,7 @@ import { ChatView } from '@/components/chat-v2/chat-view';
 import { KnowledgeTree } from '@/components/chat-v2/knowledge-tree';
 import { mockStudyOutline } from '@/lib/mock/knowledge-tree';
 import { useStudyStore } from '@/lib/store/study';
+import { useStudyStoreHydrated } from '@/lib/store/use-hydration';
 import type { StudyOutline } from '@/lib/types/study';
 
 function readOutlineFromSession(id: string): StudyOutline | null {
@@ -23,6 +24,7 @@ export default function ChatPage() {
   const searchParams = useSearchParams();
   const outlineId = searchParams.get('outlineId');
   const getOutline = useStudyStore((s) => s.getOutline);
+  const hydrated = useStudyStoreHydrated();
 
   // Resolve outline: URL → store → sessionStorage → mock fallback.
   const outline = React.useMemo<StudyOutline>(() => {
@@ -47,6 +49,13 @@ export default function ChatPage() {
   React.useEffect(() => {
     setSelectedKpId(null);
   }, [outline.id]);
+
+  // Defer rendering until the persisted store has read localStorage.
+  // Otherwise useChat initial-snapshots an empty message array and never
+  // reconciles with the rehydrated history.
+  if (!hydrated) {
+    return <div className="flex h-dvh w-full bg-background" aria-hidden />;
+  }
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">

@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/chat/chat-bubble';
 import { ChatInput } from '@/components/ui/chat/chat-input';
 import { ChatMessageList } from '@/components/ui/chat/chat-message-list';
+import { useStudyStore } from '@/lib/store/study';
 import { SESSION_START_MARKER } from '@/lib/study/chat-prompt';
 import type { StudyOutline } from '@/lib/types/study';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
@@ -49,6 +50,17 @@ export function ChatView({ outline, currentKpId, autoStartSession = true }: Chat
     currentKpIdRef.current = currentKpId;
   }, [currentKpId]);
 
+  const getStoredMessages = useStudyStore((s) => s.getMessages);
+  const setStoredMessages = useStudyStore((s) => s.setMessages);
+
+  // Snapshot stored messages once per outline so useChat initializes from
+  // persistence. Subsequent updates to the store (written by onFinish) must
+  // not re-hydrate useChat — useChat owns runtime state after mount.
+  const initialMessages = React.useMemo(
+    () => getStoredMessages(outline.id) ?? [],
+    [outline.id, getStoredMessages],
+  );
+
   const transport = React.useMemo(
     () =>
       new DefaultChatTransport({
@@ -72,19 +84,26 @@ export function ChatView({ outline, currentKpId, autoStartSession = true }: Chat
 
   const { messages, sendMessage, status, error, stop } = useChat({
     transport,
+    messages: initialMessages,
+    onFinish: ({ messages: finalMessages }) => {
+      setStoredMessages(outline.id, finalMessages);
+    },
   });
 
-  // Auto-dispatch [session_start] on first mount so the AI gives a course opening.
+  // Auto-dispatch [session_start] on first mount so the AI gives a course
+  // opening. Skip if the outline already has a real assistant reply in
+  // history — that means a previous session produced the opening.
   React.useEffect(() => {
     if (!autoStartSession) return;
-    if (messages.length > 0) {
+    const hasAssistantReply = messages.some((m) => m.role === 'assistant');
+    if (hasAssistantReply) {
       sessionStartedOutlines.add(outline.id);
       return;
     }
     if (sessionStartedOutlines.has(outline.id)) return;
     sessionStartedOutlines.add(outline.id);
     sendMessage({ text: SESSION_START_MARKER });
-  }, [autoStartSession, messages.length, sendMessage, outline.id]);
+  }, [autoStartSession, messages, sendMessage, outline.id]);
 
   const [input, setInput] = React.useState('');
   const isStreaming = status === 'submitted' || status === 'streaming';
