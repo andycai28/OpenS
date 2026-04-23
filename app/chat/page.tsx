@@ -2,12 +2,10 @@
 
 import * as React from 'react';
 import { useSearchParams } from 'next/navigation';
-import type { UIMessage } from 'ai';
 
-import { ChatView, type KnowledgePointContext } from '@/components/chat-v2/chat-view';
+import { ChatView } from '@/components/chat-v2/chat-view';
 import { KnowledgeTree } from '@/components/chat-v2/knowledge-tree';
-import { mockConversations } from '@/lib/mock/chat-conversations';
-import { mockStudyOutline, defaultMockKnowledgePointId } from '@/lib/mock/knowledge-tree';
+import { mockStudyOutline } from '@/lib/mock/knowledge-tree';
 import { useStudyStore } from '@/lib/store/study';
 import type { StudyOutline } from '@/lib/types/study';
 
@@ -19,15 +17,6 @@ function readOutlineFromSession(id: string): StudyOutline | null {
   } catch {
     return null;
   }
-}
-
-function buildSeedMessages(kpId: string): UIMessage[] {
-  const seed = mockConversations[kpId]?.seed ?? [];
-  return seed.map((m) => ({
-    id: m.id,
-    role: m.role,
-    parts: [{ type: 'text', text: m.content }],
-  }));
 }
 
 export default function ChatPage() {
@@ -47,36 +36,17 @@ export default function ChatPage() {
     return mockStudyOutline;
   }, [outlineId, getOutline]);
 
-  const isMockFallback = outline.id === mockStudyOutline.id;
-  const initialSelectedId =
-    outline.points[0]?.id ?? (isMockFallback ? defaultMockKnowledgePointId : null);
+  // Start with NO knowledge point selected — the student enters at the
+  // course-level overview and can click a KP to focus. System prompt
+  // adapts accordingly (no "current focus" section when null).
+  const [selectedKpId, setSelectedKpId] = React.useState<string | null>(null);
 
-  const [selectedKpId, setSelectedKpId] = React.useState<string | null>(initialSelectedId);
-
-  // When the outline changes (navigating from one study session to another),
-  // reset the selected KP.
+  // When the outline itself changes (new study session), reset to overview.
+  // Switching KPs within the same outline does NOT reset chat — that's
+  // handled by the stable `key={outline.id}` on ChatView.
   React.useEffect(() => {
-    setSelectedKpId(outline.points[0]?.id ?? null);
-  }, [outline.id, outline.points]);
-
-  const selectedPoint = React.useMemo(() => {
-    if (!selectedKpId) return null;
-    return outline.points.find((p) => p.id === selectedKpId) ?? null;
-  }, [outline, selectedKpId]);
-
-  const context = React.useMemo<KnowledgePointContext | null>(() => {
-    if (!selectedPoint) return null;
-    return {
-      chapterTitle: outline.title,
-      pointTitle: selectedPoint.title,
-      requirements: selectedPoint.keyPoints,
-    };
-  }, [outline.title, selectedPoint]);
-
-  const seedMessages = React.useMemo(() => {
-    if (!selectedKpId) return [] as UIMessage[];
-    return isMockFallback ? buildSeedMessages(selectedKpId) : [];
-  }, [selectedKpId, isMockFallback]);
+    setSelectedKpId(null);
+  }, [outline.id]);
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
@@ -86,19 +56,7 @@ export default function ChatPage() {
         selectedId={selectedKpId}
         onSelect={setSelectedKpId}
       />
-      {selectedPoint && context ? (
-        <ChatView
-          key={`${outline.id}:${selectedKpId}`}
-          title={selectedPoint.title}
-          subtitle={selectedPoint.description || outline.title}
-          knowledgePoint={context}
-          seedMessages={seedMessages}
-        />
-      ) : (
-        <div className="flex h-full flex-1 items-center justify-center text-muted-foreground">
-          请在左侧选择一个知识点
-        </div>
-      )}
+      <ChatView key={outline.id} outline={outline} currentKpId={selectedKpId} />
     </div>
   );
 }

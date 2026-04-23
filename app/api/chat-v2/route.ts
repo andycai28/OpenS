@@ -4,46 +4,29 @@ import { NextRequest, NextResponse } from 'next/server';
 import { streamLLM } from '@/lib/ai/llm';
 import { createLogger } from '@/lib/logger';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
+import {
+  SESSION_START_MARKER,
+  buildTutorSystemPrompt,
+  type TutorPromptMode,
+} from '@/lib/study/chat-prompt';
+import type { StudyOutline } from '@/lib/types/study';
 
 export const maxDuration = 120;
 export const runtime = 'nodejs';
 
 const log = createLogger('chat-v2');
 
-interface KnowledgePointContext {
-  chapterTitle: string;
-  pointTitle: string;
-  requirements: string[];
-}
-
 interface ChatV2Body {
   messages: UIMessage[];
-  knowledgePoint?: KnowledgePointContext;
+  outline?: StudyOutline;
+  currentKpId?: string | null;
 }
 
-function buildSystemPrompt(kp?: KnowledgePointContext): string {
-  if (!kp) {
-    return '你是一位耐心、启发式的 AI 老师。请用简洁、循序渐进的方式回答学生的问题。';
-  }
-  const reqList =
-    kp.requirements.length > 0
-      ? kp.requirements.map((r, i) => `  ${i + 1}. ${r}`).join('\n')
-      : '  （暂无）';
-  return [
-    '你是一位 1 对 1 的 AI 老师，正在为学生讲解下列知识点。',
-    '',
-    `章节：${kp.chapterTitle}`,
-    `知识点：${kp.pointTitle}`,
-    '课程要求：',
-    reqList,
-    '',
-    '教学要求：',
-    '- 使用中文回答。',
-    '- 采用启发式、Socratic 的方法，先引导学生思考再给答案。',
-    '- 每轮聚焦一个问题，避免一次信息量过大。',
-    '- 需要公式时使用 KaTeX 语法：行内 $...$，块级 $$...$$。',
-    '- 可以使用 Markdown 列表、加粗突出重点。',
-  ].join('\n');
+function extractText(msg: UIMessage): string {
+  return msg.parts
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map((p) => p.text)
+    .join('');
 }
 
 export async function POST(req: NextRequest) {
@@ -67,14 +50,52 @@ export async function POST(req: NextRequest) {
 
   try {
     const { model, modelString } = await resolveModelFromHeaders(req);
-    log.info(`Streaming chat with ${modelString} (kp=${body.knowledgePoint?.pointTitle ?? '-'})`);
 
-    const modelMessages = await convertToModelMessages(body.messages);
+    // Detect the [session_start] opening trigger and choose prompt mode.
+    // The trigger is a user message whose text is exactly the marker; we
+    // strip it from the messages sent to the LLM and switch to opening mode.
+    const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
+    const isOpening =
+      lastUser !== undefined && extractText(lastUser).trim() === SESSION_START_MARKER;
+
+    const mode: TutorPromptMode = isOpening ? 'opening' : 'ongoing';
+    const uiMessages = isOpening
+      ? body.messages.filter((m) => extractText(m).trim() !== SESSION_START_MARKER)
+      : body.messages;
+
+    // In opening mode we need at least one user-turn placeholder for the LLM
+    // (some providers reject an assistant-first / empty conversation). If we
+    // stripped the only message, synthesize a minimal start signal the model
+    // can ignore semantically.
+    const effectiveMessages: UIMessage[] = isOpening && uiMessages.length === 0
+      ? [
+          {
+            id: 'session-start-synthetic',
+            role: 'user',
+            parts: [{ type: 'text', text: '（学生已进入课堂，请按开场指令回应）' }],
+          } satisfies UIMessage,
+        ]
+      : uiMessages;
+
+    const system = body.outline
+      ? buildTutorSystemPrompt({
+          outline: body.outline,
+          currentKpId: body.currentKpId ?? null,
+          mode,
+        })
+      : '你是一位耐心的 AI 老师。用中文回答，使用 Markdown 和 KaTeX 组织内容。';
+
+    log.info(
+      `Streaming chat with ${modelString} ` +
+        `(outline=${body.outline?.id ?? '-'}, focus=${body.currentKpId ?? '-'}, mode=${mode})`,
+    );
+
+    const modelMessages = await convertToModelMessages(effectiveMessages);
 
     const result = streamLLM(
       {
         model,
-        system: buildSystemPrompt(body.knowledgePoint),
+        system,
         messages: modelMessages,
       },
       'chat-v2',

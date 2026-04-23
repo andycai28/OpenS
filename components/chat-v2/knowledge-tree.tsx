@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { BookOpen, ChevronRight } from 'lucide-react';
+import { BookOpen, ChevronRight, LayoutGrid } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import type { StudyKnowledgePoint } from '@/lib/types/study';
@@ -10,7 +10,8 @@ interface KnowledgeTreeProps {
   title?: string;
   points: StudyKnowledgePoint[];
   selectedId: string | null;
-  onSelect: (knowledgePointId: string) => void;
+  /** Called with a KP id to focus, or `null` to return to course overview. */
+  onSelect: (knowledgePointId: string | null) => void;
   className?: string;
 }
 
@@ -21,6 +22,8 @@ export function KnowledgeTree({
   onSelect,
   className,
 }: KnowledgeTreeProps) {
+  const isOverview = selectedId === null;
+
   return (
     <aside
       className={cn(
@@ -36,6 +39,20 @@ export function KnowledgeTree({
       </header>
 
       <div className="flex-1 overflow-y-auto px-2 py-3">
+        <button
+          type="button"
+          onClick={() => onSelect(null)}
+          className={cn(
+            'mb-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+            isOverview
+              ? 'bg-primary/10 font-medium text-primary'
+              : 'text-foreground/80 hover:bg-muted hover:text-foreground',
+          )}
+        >
+          <LayoutGrid className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">课程总览</span>
+        </button>
+
         {points.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
             暂无知识点
@@ -64,7 +81,7 @@ function PointItem({
 }: {
   point: StudyKnowledgePoint;
   isSelected: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string | null) => void;
 }) {
   const [expanded, setExpanded] = React.useState(false);
   const isOpen = isSelected || expanded;

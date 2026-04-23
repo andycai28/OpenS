@@ -14,21 +14,23 @@ import {
 } from '@/components/ui/chat/chat-bubble';
 import { ChatInput } from '@/components/ui/chat/chat-input';
 import { ChatMessageList } from '@/components/ui/chat/chat-message-list';
+import { SESSION_START_MARKER } from '@/lib/study/chat-prompt';
+import type { StudyOutline } from '@/lib/types/study';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 
 import { ChatHeader } from './chat-header';
 
-export interface KnowledgePointContext {
-  chapterTitle: string;
-  pointTitle: string;
-  requirements: string[];
-}
+/**
+ * Module-level guard for the [session_start] auto-dispatch. Survives React
+ * strict-mode double-mount (same JS context) but resets on full page reload.
+ */
+const sessionStartedOutlines = new Set<string>();
 
 interface ChatViewProps {
-  title: string;
-  subtitle?: string;
-  knowledgePoint: KnowledgePointContext;
-  seedMessages: UIMessage[];
+  outline: StudyOutline;
+  currentKpId: string | null;
+  /** When true, dispatch a hidden [session_start] on mount if messages are empty. */
+  autoStartSession?: boolean;
 }
 
 function extractText(message: UIMessage): string {
@@ -38,7 +40,15 @@ function extractText(message: UIMessage): string {
     .join('');
 }
 
-export function ChatView({ title, subtitle, knowledgePoint, seedMessages }: ChatViewProps) {
+export function ChatView({ outline, currentKpId, autoStartSession = true }: ChatViewProps) {
+  // Keep the latest currentKpId in a ref so the transport body function reads
+  // the *current* value each time a request is sent, without rebuilding the
+  // transport (which would reset useChat state).
+  const currentKpIdRef = React.useRef<string | null>(currentKpId);
+  React.useEffect(() => {
+    currentKpIdRef.current = currentKpId;
+  }, [currentKpId]);
+
   const transport = React.useMemo(
     () =>
       new DefaultChatTransport({
@@ -52,20 +62,47 @@ export function ChatView({ title, subtitle, knowledgePoint, seedMessages }: Chat
             'x-provider-type': c.providerType || '',
           };
         },
-        body: { knowledgePoint },
+        body: () => ({
+          outline,
+          currentKpId: currentKpIdRef.current,
+        }),
       }),
-    [knowledgePoint],
+    [outline],
   );
 
   const { messages, sendMessage, status, error, stop } = useChat({
     transport,
-    messages: seedMessages,
   });
+
+  // Auto-dispatch [session_start] on first mount so the AI gives a course opening.
+  React.useEffect(() => {
+    if (!autoStartSession) return;
+    if (messages.length > 0) {
+      sessionStartedOutlines.add(outline.id);
+      return;
+    }
+    if (sessionStartedOutlines.has(outline.id)) return;
+    sessionStartedOutlines.add(outline.id);
+    sendMessage({ text: SESSION_START_MARKER });
+  }, [autoStartSession, messages.length, sendMessage, outline.id]);
 
   const [input, setInput] = React.useState('');
   const isStreaming = status === 'submitted' || status === 'streaming';
-  const lastMessage = messages[messages.length - 1];
-  const isAssistantStreaming = isStreaming && lastMessage?.role === 'assistant';
+
+  // Hide the session-start marker from the UI — it's a backend signal, not
+  // a user utterance.
+  const visibleMessages = React.useMemo(
+    () => messages.filter((m) => extractText(m).trim() !== SESSION_START_MARKER),
+    [messages],
+  );
+  const lastVisible = visibleMessages[visibleMessages.length - 1];
+  const isAssistantStreaming = isStreaming && lastVisible?.role === 'assistant';
+  const showLoadingBubble = isStreaming && lastVisible?.role !== 'assistant';
+
+  const currentPoint = React.useMemo(
+    () => outline.points.find((p) => p.id === currentKpId) ?? null,
+    [outline.points, currentKpId],
+  );
 
   const submit = () => {
     const trimmed = input.trim();
@@ -81,16 +118,20 @@ export function ChatView({ title, subtitle, knowledgePoint, seedMessages }: Chat
     }
   };
 
+  const headerTitle = currentPoint?.title ?? outline.title ?? '开始学习';
+  const headerSubtitle = currentPoint?.description || outline.title;
+
   return (
     <section className="flex h-full min-w-0 flex-1 flex-col bg-background">
-      <ChatHeader title={title} subtitle={subtitle} />
+      <ChatHeader title={headerTitle} subtitle={headerSubtitle} />
 
       <div className="flex-1 overflow-hidden">
         <ChatMessageList smooth>
-          {messages.map((msg) => {
+          {visibleMessages.map((msg) => {
             const isUser = msg.role === 'user';
             const text = extractText(msg);
-            const isThisOneStreaming = isAssistantStreaming && msg.id === lastMessage?.id;
+            const isThisOneStreaming =
+              isAssistantStreaming && msg.id === lastVisible?.id;
             return (
               <ChatBubble key={msg.id} variant={isUser ? 'sent' : 'received'}>
                 <ChatBubbleAvatar
@@ -115,7 +156,7 @@ export function ChatView({ title, subtitle, knowledgePoint, seedMessages }: Chat
             );
           })}
 
-          {status === 'submitted' && lastMessage?.role === 'user' && (
+          {showLoadingBubble && (
             <ChatBubble variant="received">
               <ChatBubbleAvatar className="size-8" fallback={<Bot className="size-4" />} />
               <ChatBubbleMessage variant="received" isLoading />
