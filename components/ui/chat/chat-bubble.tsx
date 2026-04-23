@@ -67,7 +67,7 @@ const chatBubbleMessageVariants = cva('p-3', {
   variants: {
     variant: {
       received: 'bg-secondary text-secondary-foreground rounded-r-lg rounded-tl-lg',
-      sent: 'bg-primary text-primary-foreground rounded-l-lg rounded-tr-lg',
+      sent: 'bg-primary text-primary-foreground rounded-l-lg rounded-tr-lg whitespace-pre-wrap',
     },
     layout: {
       default: '',
@@ -89,10 +89,7 @@ interface ChatBubbleMessageProps
 const ChatBubbleMessage = React.forwardRef<HTMLDivElement, ChatBubbleMessageProps>(
   ({ className, variant, layout, isLoading = false, children, ...props }, ref) => (
     <div
-      className={cn(
-        chatBubbleMessageVariants({ variant, layout, className }),
-        'break-words max-w-full whitespace-pre-wrap',
-      )}
+      className={cn(chatBubbleMessageVariants({ variant, layout, className }), 'break-words max-w-full')}
       ref={ref}
       {...props}
     >
